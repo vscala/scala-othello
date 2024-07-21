@@ -1,8 +1,8 @@
 package othello.implementations
 
-import othello.{Algorithm, BoardState, Move, getMoves}
+import othello.{Algorithm, Bitboard, BoardState}
 
 class LowIndexMove extends Algorithm {
   override val name: String = "LowIndexMove"
-  override def findBestMove(game: BoardState): Move = game.getMoves.minBy(_.index)
+  override def findBestMove(game: BoardState): Bitboard = game.getMoves.min
 }
