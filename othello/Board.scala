@@ -29,11 +29,12 @@ extension (bitboard: Bitboard) {
   def dilate: Bitboard = {
     dilateWest | dilateEast | dilateNorth | dilateSouth | dilateNorthWest | dilateNorthEast | dilateSouthWest | dilateSouthEast
   }
+
   def dilate(direction: Direction.Value): Bitboard = direction match {
-    case Direction.North =>     dilateNorth
-    case Direction.South =>     dilateSouth
-    case Direction.West =>      dilateWest
-    case Direction.East =>      dilateEast
+    case Direction.North => dilateNorth
+    case Direction.South => dilateSouth
+    case Direction.West => dilateWest
+    case Direction.East => dilateEast
     case Direction.NorthWest => dilateNorthWest
     case Direction.NorthEast => dilateNorthEast
     case Direction.SouthWest => dilateSouthWest
@@ -41,14 +42,12 @@ extension (bitboard: Bitboard) {
   }
 
   def and(other: Bitboard): Bitboard = bitboard & other
-  def or(other: Bitboard):  Bitboard = bitboard | other
-
+  def or(other: Bitboard): Bitboard = bitboard | other
   def count: Int = java.lang.Long.bitCount(bitboard)
 
-  def toMoveSeq: Seq[Move] = {
-    (0 until 64).filter { index =>
-      (bitboard & (1L << index)) != 0
-    }.map(Move.apply)
+  def toMoveList: List[Bitboard] = {
+    if (bitboard == 0) List.empty
+    else (bitboard & -bitboard) :: (bitboard & (bitboard - 1L)).toMoveList
   }
 
   def display: String = {
@@ -61,38 +60,32 @@ extension (bitboard: Bitboard) {
   }
 }
 
-case class Board(white: Bitboard, black: Bitboard)
-
-object Board {
-  val start: Board = Board(
-    white = 0x0000001008000000L,
-    black = 0x0000000810000000L
-  )
-}
-
-extension (board: Board) {
-  def display: String = {
+case class Board(white: Bitboard, black: Bitboard) {
+  @inline
+  final def display: String = {
     (0 until 8).map { row =>
       (0 until 8).map { col =>
         val bit = 1L << (row * 8 + col)
-        if ((board.white & bit) != 0) "W"
-        else if ((board.black & bit) != 0) "B"
+        if ((white & bit) != 0) "W"
+        else if ((black & bit) != 0) "B"
         else "."
       }.mkString("", " ", "\n")
     }.mkString
   }
 
-  def occupied: Bitboard = board.white | board.black
-  def unoccupied: Bitboard = ~board.occupied
+  @inline final def occupied: Bitboard = white | black
+  @inline final def unoccupied: Bitboard = ~occupied
 
-  def getBoard(boardColor: BoardColor.Value): Bitboard = boardColor match {
-    case BoardColor.White => board.white
-    case BoardColor.Black => board.black
+  @inline
+  final def getBoard(boardColor: BoardColor.Value): Bitboard = boardColor match {
+    case BoardColor.White => white
+    case BoardColor.Black => black
   }
-  def getOtherBoard(boardColor: BoardColor.Value): Bitboard = getBoard(boardColor.other)
 
-  def isValidMove(boardColor: BoardColor.Value)(move: Move): Boolean = isValidMove(boardColor)(move.toBitboard)
-  def isValidMove(boardColor: BoardColor.Value)(move: Bitboard): Boolean = {
+  @inline final def getOtherBoard(boardColor: BoardColor.Value): Bitboard = getBoard(boardColor.other)
+
+  @inline
+  final def isValidMove(boardColor: BoardColor.Value)(move: Bitboard): Boolean = {
     val board = getBoard(boardColor)
     val otherBoard = getOtherBoard(boardColor)
 
@@ -107,15 +100,49 @@ extension (board: Board) {
     }
   }
 
-  def getMoves(boardColor: BoardColor.Value): Seq[Move] = {
+  @inline
+  final def filterValidMoves(boardColor: BoardColor.Value, moves: Bitboard): Bitboard = {
+    @tailrec
+    def checkValidMoves(remain: Bitboard, directions: List[Direction.Value], valid: Bitboard = 0L): Bitboard = {
+      if (remain == 0L || directions.isEmpty) valid
+      else {
+        val direction = directions.head
+        val maybeValidForDirection = remain.dilate(direction) & getOtherBoard(boardColor)
+
+        def findValid(remain: Bitboard): Bitboard = {
+          if (remain == 0L) 0
+          else {
+            val current = remain.dilate(direction)
+            val foundValid = current & getBoard(boardColor)
+            val foundRemain = current & getOtherBoard(boardColor)
+            (findValid(foundRemain) | foundValid).dilate(direction.opposite)
+          }
+        }
+
+        val foundValid = findValid(maybeValidForDirection).dilate(direction.opposite)
+        checkValidMoves(remain & ~foundValid, directions.tail, valid | foundValid)
+      }
+    }
+    checkValidMoves(moves, Direction.values.toList)
+  }
+
+  extension (bitboard: Bitboard) {
+    @inline
+    def filterValidMoves(boardColor: BoardColor.Value): Bitboard = Board.this.filterValidMoves(boardColor, bitboard)
+  }
+
+  @inline
+  final def getMoves(boardColor: BoardColor.Value): List[Bitboard] = {
     getOtherBoard(boardColor)
       .dilate
       .and(unoccupied)
-      .toMoveSeq
-      .filter(isValidMove(boardColor))
+      .filterValidMoves(boardColor)
+      .toMoveList
   }
-  def playMove(boardColor: BoardColor.Value, move: Move): Board = {
-    val bitboard = getBoard(boardColor) | move.toBitboard
+
+  @inline
+  final def playMove(boardColor: BoardColor.Value, move: Bitboard): Board = {
+    val bitboard = getBoard(boardColor) | move
     val otherBitboard = getOtherBoard(boardColor)
     val flipped: Bitboard = Direction.values.flatMap { direction =>
       @tailrec
@@ -124,8 +151,8 @@ extension (board: Board) {
           flipUntilSwitch(current | current.dilate(direction), lastPos.dilate(direction))
         else Option.when((current & bitboard) != 0)(current)
       }
-      Option.when(move.toBitboard.dilate(direction).and(otherBitboard) != 0) {
-        flipUntilSwitch(move.toBitboard.dilate(direction), move.toBitboard.dilate(direction))
+      Option.when(move.dilate(direction).and(otherBitboard) != 0) {
+        flipUntilSwitch(move.dilate(direction), move.dilate(direction))
       }
     }.flatten.foldLeft(bitboard)(_ | _)
 
@@ -135,6 +162,13 @@ extension (board: Board) {
     if (boardColor == BoardColor.White) Board(white = finalBitboard, black = finalOtherBitboard)
     else Board(white = finalOtherBitboard, black = finalBitboard)
   }
+}
+
+object Board {
+  val start: Board = Board(
+    white = 0x0000001008000000L,
+    black = 0x0000000810000000L
+  )
 }
 
 object BoardColor {
@@ -150,35 +184,43 @@ object BoardColor {
 }
 
 object Direction {
-  sealed trait Value
-  case object North extends Value
-  case object South extends Value
-  case object West extends Value
-  case object East extends Value
-  case object NorthWest extends Value
-  case object NorthEast extends Value
-  case object SouthWest extends Value
-  case object SouthEast extends Value
+  sealed trait Value {
+    def opposite: Value
+  }
+  case object North extends Value {
+    override def opposite: Value = South
+  }
+  case object South extends Value {
+    override def opposite: Value = North
+  }
+  case object West extends Value {
+    override def opposite: Value = East
+  }
+  case object East extends Value {
+    override def opposite: Value = West
+  }
+  case object NorthWest extends Value {
+    override def opposite: Value = SouthEast
+  }
+  case object NorthEast extends Value {
+    override def opposite: Value = SouthWest
+  }
+  case object SouthWest extends Value {
+    override def opposite: Value = NorthEast
+  }
+  case object SouthEast extends Value {
+    override def opposite: Value = NorthWest
+  }
   val values: Set[Value] = Set(North, South, West, East, NorthWest, NorthEast, SouthWest, SouthEast)
 }
 
-case class Move(index: Int) {
-  require(index >= 0 && index < 64)
+case class BoardState(board: Board, currentPlayer: BoardColor.Value) {
+  @inline final def playMove(move: Bitboard): BoardState = BoardState(board.playMove(currentPlayer, move), currentPlayer.other)
+  @inline final def skipMove: BoardState = BoardState(board, currentPlayer.other)
+  @inline final def getMoves: List[Bitboard] = board.getMoves(currentPlayer)
+  @inline final def isGameOver: Boolean = getMoves.isEmpty && skipMove.getMoves.isEmpty
 }
-
-extension (move: Move) {
-  def toBitboard: Bitboard = 1L << move.index
-}
-
-case class BoardState(board: Board, currentPlayer: BoardColor.Value)
 
 object BoardState {
   val start: BoardState = BoardState(Board.start, BoardColor.Black)
-}
-
-extension (boardState: BoardState) {
-  def playMove(move: Move): BoardState = BoardState(boardState.board.playMove(boardState.currentPlayer, move), boardState.currentPlayer.other)
-  def skipMove: BoardState = BoardState(boardState.board, boardState.currentPlayer.other)
-  def getMoves: Seq[Move] = boardState.board.getMoves(boardState.currentPlayer)
-  def isGameOver: Boolean = boardState.getMoves.isEmpty && boardState.skipMove.getMoves.isEmpty
 }
